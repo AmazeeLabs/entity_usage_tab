@@ -1,0 +1,6 @@
+entity_usage.entity_usage_settings_form:
+  title: 'Entity Usage'
+  route_name: entity_usage.entity_usage_settings_form
+  description: 'Entity usage settings.'
+  parent: system.admin_config_content
+  weight: 99
