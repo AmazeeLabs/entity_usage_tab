@@ -4,11 +4,7 @@
   "description": "Enhances each entity with a list of entities that reference it.",
   "keywords": ["Drupal"],
   "license": "GPL-2.0+",
-  "homepage": "https://www.drupal.org/project/entity_usage",
   "minimum-stability": "dev",
-  "support": {
-    "issues": "https://www.drupal.org/project/issues/entity_usage",
-    "source": "http://cgit.drupalcode.org/entity_usage"
-  },
+  "support": {},
   "require": { }
 }
