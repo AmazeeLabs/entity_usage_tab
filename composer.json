@@ -1,5 +1,5 @@
 {
-  "name": "drupal/entity_usage",
+  "name": "drupal/entity_usage_tab",
   "type": "drupal-module",
   "description": "Enhances each entity with a list of entities that reference it.",
   "keywords": ["Drupal"],
