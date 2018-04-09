@@ -193,7 +193,7 @@ class EntityUsageController extends ControllerBase {
    */
   protected function buildEntityRow(EntityInterface $entity, $route) {
     $row[] = $entity->label();
-    $row[] = implode(' -> ', array_map([$this, 'formatEntityId'], $route));
+    $row[] = implode(' -> ', array_map([$this, 'formatEntityTitle'], $route));
 
     // Display links only for leaf items.
     foreach (static::$LINKS as $rel => $text) {
@@ -207,12 +207,28 @@ class EntityUsageController extends ControllerBase {
     return $row;
   }
 
-  protected function formatEntityId($entity) {
+  /**
+   * @param \Drupal\Core\Entity\EntityInterface $entity
+   *   The entity.
+   *
+   * @return string
+   */
+  protected function formatEntityId(EntityInterface $entity) {
     return implode(':', [
       $entity->getEntityTypeId(),
       $entity->bundle(),
-      $entity->id()
+      $entity->id(),
     ]);
+  }
+
+  /**
+   * @param \Drupal\Core\Entity\EntityInterface $entity
+   *   The entity.
+   *
+   * @return string
+   */
+  protected function formatEntityTitle(EntityInterface $entity) {
+    return sprintf('%s (%s)',method_exists($entity, 'getTitle') ? $entity->getTitle() : $entity->label(), $this->formatEntityId($entity));
   }
 
   /**
