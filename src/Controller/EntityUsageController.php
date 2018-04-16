@@ -230,15 +230,14 @@ class EntityUsageController extends ControllerBase {
   protected function buildEntityRow(EntityInterface $entity, $route) {
     array_pop($route);
     $routeWithoutNode = array_reverse($route);
+    $formattedRoute = implode(' -> ', array_map([$this, 'formatEntityTitle'], $routeWithoutNode));
+    $formattedRoute = new FormattableMarkup($formattedRoute, []);
 
-    if (empty($route)) {
+    if (empty($route) || empty($formattedRoute->string)) {
       $row[] = $this->t('@title', [
         '@title' => $entity->label(),
       ]);
     } else {
-      $formattedRoute = implode(' -> ', array_map([$this, 'formatEntityTitle'], $routeWithoutNode));
-      $formattedRoute = new FormattableMarkup($formattedRoute, []);
-
       $row[] = $this->t('@title<br/><small>@label: @route</small>', [
         '@title' => $entity->label(),
         '@label' => t('Location'),
@@ -288,6 +287,10 @@ class EntityUsageController extends ControllerBase {
           }
         }
       }
+    }
+
+    if (empty($title) && method_exists($entity, 'getParagraphType')) {
+      $title = $entity->getParagraphType()->label();
     }
 
     return $title;
