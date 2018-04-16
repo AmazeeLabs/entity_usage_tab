@@ -2,9 +2,10 @@
 
 namespace Drupal\entity_usage\Controller;
 
+use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Core\Controller\ControllerBase;
-use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\EntityRepositoryInterface;
 use Drupal\Core\Entity\FieldableEntityInterface;
 use Drupal\Core\Field\FieldDefinitionInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
@@ -43,12 +44,20 @@ class EntityUsageController extends ControllerBase {
   protected $entityFieldManager;
 
   /**
+   * The entity repository.
+   *
+   * @var \Drupal\Core\Entity\EntityRepositoryInterface
+   */
+  protected $entityRepository;
+
+  /**
    * {@inheritdoc}
    */
-  public function __construct(EntityTypeManager $entity_type_manager, QueryFactory $entity_query, EntityFieldManager $entity_field_manager) {
+  public function __construct(EntityTypeManager $entity_type_manager, QueryFactory $entity_query, EntityFieldManager $entity_field_manager, EntityRepositoryInterface $entity_repository) {
     $this->entityTypeManager = $entity_type_manager;
     $this->entityQuery = $entity_query;
     $this->entityFieldManager = $entity_field_manager;
+    $this->entityRepository = $entity_repository;
   }
 
   /**
@@ -58,7 +67,8 @@ class EntityUsageController extends ControllerBase {
     return new static(
       $container->get('entity_type.manager'),
       $container->get('entity.query'),
-      $container->get('entity_field.manager')
+      $container->get('entity_field.manager'),
+      $container->get('entity.repository')
     );
   }
 
@@ -96,7 +106,7 @@ class EntityUsageController extends ControllerBase {
 
     foreach ($this->getReferencingEntitiesWithParents($entity->getEntityTypeId(), $entity->id()) as $item) {
       if ($this->shouldShowItem($item)) {
-        $rows = array_merge($rows, $this->getTableRowsFromItem($item, [$entity]));
+        $rows = array_merge($rows, $this->getTableRowsFromItem($item, []));
       }
     }
 
@@ -110,12 +120,38 @@ class EntityUsageController extends ControllerBase {
       '#theme' => 'table',
       '#rows' => $rows,
       '#header' => [
-        $this->t('Id'),
-        $this->t('Route'),
-        $this->t('Link'),
+        $this->t('Entity'),
+        $this->t('View'),
         $this->t('Edit'),
       ],
     ];
+  }
+
+  /**
+   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
+   * @param \Drupal\Core\Entity\EntityInterface|NULL $entity
+   *
+   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
+   */
+  public function getTitle(RouteMatchInterface $route_match, EntityInterface $entity = NULL) {
+    if (!isset($entity)) {
+      foreach ($route_match->getParameters() as $parameter) {
+        if ($parameter instanceof EntityInterface) {
+          $entity = $parameter;
+          break;
+        }
+      }
+    }
+
+    if (isset($entity)) {
+      $translatedEntity = $this->entityRepository->getTranslationFromContext($entity);
+    }
+
+    $name = isset($translatedEntity) && $translatedEntity->hasField('name') ? $translatedEntity->get('name')->value : 'entity';
+    $bundle = isset($translatedEntity) ? ucwords($translatedEntity->bundle()) : '';
+    $type = isset($translatedEntity) ? ucwords($translatedEntity->getEntityTypeId()) : '';
+
+    return $this->t('Entity usage of @bundle "@name" (@type)', ['@bundle' => $bundle, '@name' => $name, '@type' => $type]);
   }
 
   /**
@@ -192,8 +228,23 @@ class EntityUsageController extends ControllerBase {
    *   Single row.
    */
   protected function buildEntityRow(EntityInterface $entity, $route) {
-    $row[] = $entity->label();
-    $row[] = implode(' -> ', array_map([$this, 'formatEntityTitle'], $route));
+    array_pop($route);
+    $routeWithoutNode = array_reverse($route);
+
+    if (empty($route)) {
+      $row[] = $this->t('@title', [
+        '@title' => $entity->label(),
+      ]);
+    } else {
+      $formattedRoute = implode(' -> ', array_map([$this, 'formatEntityTitle'], $routeWithoutNode));
+      $formattedRoute = new FormattableMarkup($formattedRoute, []);
+
+      $row[] = $this->t('@title<br/><small>@label: @route</small>', [
+        '@title' => $entity->label(),
+        '@label' => t('Location'),
+        '@route' => $formattedRoute,
+      ]);
+    }
 
     // Display links only for leaf items.
     foreach (static::$LINKS as $rel => $text) {
@@ -213,22 +264,34 @@ class EntityUsageController extends ControllerBase {
    *
    * @return string
    */
-  protected function formatEntityId(EntityInterface $entity) {
-    return implode(':', [
-      $entity->getEntityTypeId(),
-      $entity->bundle(),
-      $entity->id(),
-    ]);
-  }
-
-  /**
-   * @param \Drupal\Core\Entity\EntityInterface $entity
-   *   The entity.
-   *
-   * @return string
-   */
   protected function formatEntityTitle(EntityInterface $entity) {
-    return sprintf('%s (%s)',method_exists($entity, 'getTitle') ? $entity->getTitle() : $entity->label(), $this->formatEntityId($entity));
+    if (method_exists($entity, 'hasField') && $entity->hasField('field_twm_title')) {
+      $title = $entity->get('field_twm_title')->value;
+    } elseif (method_exists($entity, 'hasField') && $entity->hasField('field_hss_title')) {
+      $title = $entity->get('field_hss_title')->value;
+    } elseif (method_exists($entity, 'hasField') && $entity->hasField('field_title')) {
+      $title = $entity->get('field_title')->value;
+    } elseif (method_exists($entity, 'hasField') && $entity->hasField('title')) {
+      $title = $entity->get('title')->value;
+    } elseif (method_exists($entity, 'getTitle')) {
+      $title = $entity->getTitle();
+    } else {
+      $title = $entity->label();
+
+      if (method_exists($entity, 'getParentEntity') && $parent = $entity->getParentEntity()) {
+        $parent_field = $entity->get('parent_field_name')->value;
+        $values = $parent->{$parent_field};
+        foreach ($values as $key => $value) {
+          if ($value->entity->id() == $entity->id()) {
+            $title = sprintf('%s (%s)', $value->getFieldDefinition()->getLabel(), ucwords($value->entity->bundle()));
+            break;
+          }
+        }
+      }
+    }
+
+    return $title;
+
   }
 
   /**

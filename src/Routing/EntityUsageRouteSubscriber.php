@@ -41,7 +41,7 @@ class EntityUsageRouteSubscriber extends RouteSubscriberBase {
         $route
           ->addDefaults([
             '_controller' => '\Drupal\entity_usage\Controller\EntityUsageController::list',
-            '_title' => 'Entity usage',
+            '_title_callback' => '\Drupal\entity_usage\Controller\EntityUsageController::getTitle',
             'entity_type' => $entityType,
           ])
           ->addRequirements([
