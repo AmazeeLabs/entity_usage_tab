@@ -340,7 +340,8 @@ class EntityUsageController extends ControllerBase {
     foreach ($this->getReferencingFields($entityType) as $referencingEntityType => $fields) {
       $query = $this
         ->entityQuery
-        ->get($referencingEntityType, 'OR');
+        ->get($referencingEntityType, 'OR')
+        ->sort('created', 'DESC');
 
       foreach ($fields as $field) {
         $query->condition($field, $entityId);
