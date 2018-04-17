@@ -282,7 +282,7 @@ class EntityUsageController extends ControllerBase {
         $values = $parent->{$parent_field};
         foreach ($values as $key => $value) {
           if ($value->entity->id() == $entity->id()) {
-            $title = sprintf('%s (%s)', $value->getFieldDefinition()->getLabel(), ucwords($value->entity->bundle()));
+            $title = sprintf('%s (%s)', $value->getFieldDefinition()->getLabel(), ucwords($value->entity->getParagraphType()->label()));
             break;
           }
         }
