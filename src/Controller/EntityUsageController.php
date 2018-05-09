@@ -50,6 +50,14 @@ class EntityUsageController extends ControllerBase {
    */
   protected $entityRepository;
 
+
+  /**
+   * The entity in usage.
+   *
+   * @var \Drupal\Core\Entity\EntityInterface
+   */
+  protected $entityUsage;
+
   /**
    * {@inheritdoc}
    */
@@ -70,6 +78,20 @@ class EntityUsageController extends ControllerBase {
       $container->get('entity_field.manager'),
       $container->get('entity.repository')
     );
+  }
+
+  /**
+   * @return \Drupal\Core\Entity\EntityInterface
+   */
+  protected function getEntityUsage() {
+    return $this->entityUsage;
+  }
+
+  /**
+   * @param $entity \Drupal\Core\Entity\EntityInterface
+   */
+  protected function setEntityUsage($entity) {
+    $this->entityUsage = $entity;
   }
 
   /**
@@ -101,12 +123,26 @@ class EntityUsageController extends ControllerBase {
    */
   public function list(RouteMatchInterface $route_match) {
     $entity = $this->getEntityFromRouteMatch($route_match);
-
+    $this->setEntityUsage($entity);
     $rows = [];
 
     foreach ($this->getReferencingEntitiesWithParents($entity->getEntityTypeId(), $entity->id()) as $item) {
       if ($this->shouldShowItem($item)) {
-        $rows = array_merge($rows, $this->getTableRowsFromItem($item, []));
+        $curRow = $this->getTableRowsFromItem($item, []);
+
+        if (!isset($rows[key($curRow)])) {
+          $rows = array_merge($rows, $curRow);
+
+        } elseif (isset($rows[key($curRow)]['location']) && isset($curRow[key($curRow)]['location'])) {
+          // Reduce duplicate locations caused by finding all translations of an entity.
+          if (strpos($rows[key($curRow)]['location'], $curRow[key($curRow)]['location']) === FALSE) {
+            $rows[key($curRow)]['location'] = new FormattableMarkup('@current<br>@new', [
+              '@current' => $rows[key($curRow)]['location'],
+              '@new' => $curRow[key($curRow)]['location'],
+            ]);
+
+          }
+        }
       }
     }
 
@@ -120,7 +156,8 @@ class EntityUsageController extends ControllerBase {
       '#theme' => 'table',
       '#rows' => $rows,
       '#header' => [
-        $this->t('Entity'),
+        $this->t('Admin Title / Title'),
+        $this->t('Location(s)'),
         $this->t('View'),
         $this->t('Edit'),
       ],
@@ -203,7 +240,7 @@ class EntityUsageController extends ControllerBase {
     $route[] = $entity;
 
     if ($this->shouldBreakRendering($entity)) {
-      return [$this->buildEntityRow($entity, $route)];
+      return [$entity->getType() . ':' . $entity->id() => $this->buildEntityRow($entity, $route)];
     }
 
     $rows = [];
@@ -231,26 +268,42 @@ class EntityUsageController extends ControllerBase {
     array_pop($route);
     $routeWithoutNode = array_reverse($route);
     $formattedRoute = implode(' -> ', array_map([$this, 'formatEntityTitle'], $routeWithoutNode));
-    $formattedRoute = new FormattableMarkup($formattedRoute, []);
 
-    if (empty($route) || empty($formattedRoute->string)) {
-      $row[] = $this->t('@title', [
-        '@title' => $entity->label(),
-      ]);
-    } else {
-      $row[] = $this->t('@title<br/><small>@label: @route</small>', [
-        '@title' => $entity->label(),
-        '@label' => t('Location'),
-        '@route' => $formattedRoute,
-      ]);
+    if (empty($route) && method_exists($entity, 'getFieldDefinitions')) {
+      // Find out the label of which field on the node is being referenced by entity reference.
+      foreach ($entity->getFieldDefinitions() as $fieldName => $fieldDefinition) {
+        if ($fieldDefinition->getType() === 'entity_reference') {
+          foreach ($entity->get($fieldName) as $referencedItem) {
+            if ($referencedItem->entity->id() === $this->getEntityUsage()->id()) {
+              $formattedRoute = $fieldDefinition->getLabel();
+              break 2;
+            }
+          }
+        }
+      }
     }
+
+    if ($entity instanceof FieldableEntityInterface &&
+      $entity->hasField('field_admin_title') &&
+      ($admin_title_field = $entity->get('field_admin_title')) &&
+      !$admin_title_field->isEmpty()) {
+      $row['title'] = $this->t('@admintitle<br/><small>@label: @title</small>', [
+          '@admintitle' => $entity->toLink($admin_title_field->value)->toString(),
+          '@label' => t('Public title'),
+          '@title' => $entity->toLink($entity->label())->toString(),
+        ]);
+    } else {
+      $row['title'] = $entity->toLink($entity->label());
+    }
+
+    $row['location'] = $formattedRoute;
 
     // Display links only for leaf items.
     foreach (static::$LINKS as $rel => $text) {
       if ($entity->hasLinkTemplate($rel) && $this->shouldBreakRendering($entity)) {
-        $row[] = $entity->toLink($text, $rel);
+        $row[$text] = $entity->toLink($text, $rel);
       } else {
-        $row[] = '';
+        $row[$text] = '';
       }
     }
 
@@ -274,23 +327,28 @@ class EntityUsageController extends ControllerBase {
       $title = $entity->get('title')->value;
     } elseif (method_exists($entity, 'getTitle')) {
       $title = $entity->getTitle();
-    } else {
-      $title = $entity->label();
-
-      if (method_exists($entity, 'getParentEntity') && $parent = $entity->getParentEntity()) {
-        $parent_field = $entity->get('parent_field_name')->value;
-        $values = $parent->{$parent_field};
-        foreach ($values as $key => $value) {
-          if ($value->entity->id() == $entity->id()) {
-            $title = sprintf('%s (%s)', $value->getFieldDefinition()->getLabel(), ucwords($value->entity->getParagraphType()->label()));
-            break;
-          }
+    } elseif (method_exists($entity, 'getParentEntity') && $parent = $entity->getParentEntity()) {
+      $parent_field = $entity->get('parent_field_name')->value;
+      $values = $parent->{$parent_field};
+      foreach ($values as $key => $value) {
+        if ($value->entity->id() == $entity->id()) {
+          return $this->t('@title (@label)', [
+            '@title' => $value->getFieldDefinition()->getLabel(),
+            '@label' => ucwords($value->entity->getParagraphType()->label()),
+          ]);
         }
       }
     }
 
-    if (empty($title) && method_exists($entity, 'getParagraphType')) {
-      $title = $entity->getParagraphType()->label();
+    if (method_exists($entity, 'getParagraphType')) {
+      if (empty($title)) {
+        $title = $entity->getParagraphType()->label();
+      } else {
+        $title = $this->t('@title (@label)', [
+          '@title' => $title,
+          '@label' => $entity->getParagraphType()->label(),
+          ]);
+      }
     }
 
     return $title;
