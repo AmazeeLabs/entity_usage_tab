@@ -99,9 +99,19 @@ class EntityUsageController extends ControllerBase {
    *
    * @var array
    */
-  public static $SUPPORTED_FIELD_TYPES = [
+  public static $REFERENCE_FIELD_TYPES = [
     'entity_reference',
     'entity_reference_revisions',
+  ];
+
+  /**
+   * List of reference field types.
+   *
+   * @var array
+   */
+  public static $LINK_FIELD_TYPES = [
+    'link',
+    'teaser_link',
   ];
 
   /**
@@ -261,8 +271,10 @@ class EntityUsageController extends ControllerBase {
    *   The entity.
    * @param EntityInterface[] $route
    *   Nesting level.
+   *
    * @return array
    *   Single row.
+   * @throws \Drupal\Core\Entity\EntityMalformedException
    */
   protected function buildEntityRow(EntityInterface $entity, $route) {
     array_pop($route);
@@ -301,7 +313,7 @@ class EntityUsageController extends ControllerBase {
     // Display links only for leaf items.
     foreach (static::$LINKS as $rel => $text) {
       if ($entity->hasLinkTemplate($rel) && $this->shouldBreakRendering($entity)) {
-        $row[$text] = $entity->toLink($text, $rel);
+        $row[$text] = $entity->toLink($this->t($text), $rel);
       } else {
         $row[$text] = '';
       }
@@ -363,11 +375,13 @@ class EntityUsageController extends ControllerBase {
    *   Entity type id.
    * @param int $entityId
    *   Id of the entity.
+   *
    * @return array
    *   UsageItem: [
    *     'entity' => EntityInterface
    *     'parents' => UsageItem[]
    *   ]
+   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
    */
   protected function getReferencingEntitiesWithParents($entityType, $entityId) {
     $result = [];
@@ -389,21 +403,39 @@ class EntityUsageController extends ControllerBase {
    *   Entity type id.
    * @param int $entityId
    *   Id of the entity.
+   *
    * @return EntityInterface[]
    *   Array of parent entities.
+   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
    */
   protected function getReferencingEntities($entityType, $entityId) {
     $entities = [];
 
-    foreach ($this->getReferencingFields($entityType) as $referencingEntityType => $fields) {
+    $referenceFields = $this->getReferencingFields($entityType);
+    $linkFields = $this->getAllLinkFields();
+    $allEntityTypes = array_unique(array_merge(array_keys($referenceFields), array_keys($linkFields)));
+    $uris = $this->getAllUris($entityType, $entityId);
+
+    foreach ($allEntityTypes as $referencingEntityType) {
       $query = $this
         ->entityQuery
-        ->get($referencingEntityType, 'OR')
-        ->sort('created', 'DESC');
+        ->get($referencingEntityType, 'OR');
 
-      foreach ($fields as $field) {
-        $query->condition($field, $entityId);
+      if (isset($referenceFields[$referencingEntityType])) {
+        foreach ($referenceFields[$referencingEntityType] as $field) {
+          $query->condition($field, $entityId);
+        }
       }
+
+      if (isset($linkFields[$referencingEntityType])) {
+        foreach ($linkFields[$referencingEntityType] as $field) {
+          foreach ($uris as $uri) {
+            $query->condition("$field.uri", $uri, 'ENDS_WITH');
+          }
+        }
+      }
+
+      // TODO: Add sorting if possible
 
       $result = $query->execute();
 
@@ -417,6 +449,48 @@ class EntityUsageController extends ControllerBase {
     }
 
     return $entities;
+  }
+
+  /**
+   * Returns the list of all possible uris we know of for the given entity.
+   *
+   * @param string $entityType
+   *   Entity type id.
+   * @param mixed $entityId
+   *   The id of the entity.
+   *
+   * @return array
+   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+   */
+  protected function getAllUris($entityType, $entityId) {
+    $uris = [
+      "entity:$entityType/$entityId",
+    ];
+
+    $entity = $this->entityTypeManager->getStorage($entityType)->load($entityId);
+    if ($entityType == 'media') {
+      $sourceField = $entity->getType()->getConfiguration()['source_field'];
+      if ($entity->hasField($sourceField)) {
+        $fileEntities = $entity->get($sourceField)->referencedEntities();
+        if (is_array($fileEntities)) {
+          foreach ($fileEntities as $fileEntity) {
+            $uris[] = $fileEntity->getFileUri();
+
+            // In addition to the stream uri, get an absolute path to file.
+            $absoluteUrl = file_create_url($fileEntity->getFileUri());
+            $uris[] = $absoluteUrl;
+
+            // Finally, get a relative path to. These are widely used because
+            // they work across the environments.
+            $parts = parse_url($absoluteUrl);
+            $uris[] = $parts['path'];
+            $uris[] = "internal:$parts[path]";
+          }
+        }
+      }
+    }
+
+    return $uris;
   }
 
   /**
@@ -438,8 +512,35 @@ class EntityUsageController extends ControllerBase {
         foreach ($this->entityFieldManager->getFieldStorageDefinitions($entityType) as $fieldStorage) {
           if (
             $fieldStorage instanceof FieldStorageConfigInterface
-            && in_array($fieldStorage->getType(), static::$SUPPORTED_FIELD_TYPES)
+            && in_array($fieldStorage->getType(), static::$REFERENCE_FIELD_TYPES)
             && $fieldStorage->getSetting('target_type') == $targetEntityType
+          ) {
+            $fields[$entityType][] = $fieldStorage->getName();
+          }
+        }
+      }
+    }
+
+    return $fields;
+  }
+
+  /**
+   * Return the list of all the link fields in the system grouped by the entity
+   * type.
+   *
+   * @return array
+   */
+  protected function getAllLinkFields() {
+    $fields = [];
+
+    foreach ($this->entityTypeManager->getDefinitions() as $entityType => $definition) {
+      if ($definition->isSubclassOf(FieldableEntityInterface::class)) {
+
+        /** @var FieldDefinitionInterface $fieldStorage */
+        foreach ($this->entityFieldManager->getFieldStorageDefinitions($entityType) as $fieldStorage) {
+          if (
+            $fieldStorage instanceof FieldStorageConfigInterface
+            && in_array($fieldStorage->getType(), static::$LINK_FIELD_TYPES)
           ) {
             $fields[$entityType][] = $fieldStorage->getName();
           }
